@@ -1,5 +1,5 @@
 // Offline cache. Bump VERSION when shipping changes.
-const VERSION = 'focusisle-v5';
+const VERSION = 'focusisle-v6';
 const ASSETS = ['./', 'index.html', 'style.css', 'js/app.js', 'js/sprites.js', 'js/audio.js',
   'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 

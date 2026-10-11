@@ -266,3 +266,9 @@ body.focusing #tabbar { display: none; }
 .datainfo p { color: var(--mist); margin: 0 0 8px; max-width: 60ch; }
 .datainfo b { color: var(--foam); }
 .datainfo .btn.ghost { margin-top: 4px; }
+
+/* "Other": what's this session for? */
+.ask { display: block; font-family: var(--display); font-size: 18px; font-weight: 500; margin: 18px 0 8px; color: var(--wood); }
+#tasklabel { background: #fff8e6; box-shadow: inset 0 0 0 3px var(--sand-line); font-size: 16px; }
+.chips.recent { margin-top: 8px; }
+.chip.small { padding: 4px 10px 5px; font-size: 14px; }

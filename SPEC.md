@@ -15,7 +15,7 @@ A Forest-style focus timer. Focus for a set time and a pixel-art building or tre
 
 ## MVP scope
 - **Focus**: duration 5–180 min, pick a tag, countdown, the tag's object builds up row by row.
-- **Tag → object**: each tag builds its own object (Study → Library, Work → Cottage, Coding → Windmill, Reading → Cherry, Other → Oak). Change it in Shop or Settings. The island legend counts per tag.
+- **Tag → object**: each tag builds its own object (Study → Library, Work → Cottage, Skill dev → Windmill, Wellbeing → Cherry, Other → Oak). Change it in Shop or Settings. The island legend counts per tag. **Other** asks what the session is for (required, with recent answers to pick from); that label is saved with the session and shown in history and stats.
 - **Strict mode**: the page goes hidden (app switch or tab switch) for longer than the grace period, and the session dies. The Mac option also counts window blur (switching to another app).
 - **Island**: every finished session is placed on an island that grows organically, filtered by Today / Week / Month / All.
 - **Stats**: totals, bar chart by hour/day/month, tag breakdown, success vs dead, history.

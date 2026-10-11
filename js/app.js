@@ -11,9 +11,9 @@ const CANCEL_WINDOW = 10; // seconds: giving up this early cancels without a dea
 const DEFAULT_TAGS = [
   { id: 'study', name: 'Study', color: '#4dabf7', species: 'library' },
   { id: 'work', name: 'Work', color: '#f59f00', species: 'house' },
-  { id: 'coding', name: 'Coding', color: '#7bd389', species: 'windmill' },
-  { id: 'reading', name: 'Reading', color: '#da77f2', species: 'cherry' },
-  { id: 'other', name: 'Other', color: '#adb5bd', species: 'oak' },
+  { id: 'coding', name: 'Skill dev', color: '#7bd389', species: 'windmill' },
+  { id: 'reading', name: 'Wellbeing', color: '#da77f2', species: 'cherry' },
+  { id: 'other', name: 'Other', color: '#adb5bd', species: 'oak', ask: true }, // asks what the session is for
 ];
 const FREE = SPECIES.filter(s => s.cost === 0).map(s => s.id);
 
@@ -51,6 +51,12 @@ function normalize(src) {
   if (!Array.isArray(out.purchases)) out.purchases = [];
   out.unlocked = [...new Set([...FREE, ...(out.unlocked || [])])];
   for (const t of out.tags) if (!t.species) t.species = DEFAULT_TAGS.find(d => d.id === t.id)?.species || 'oak';
+  // Renamed defaults; leave any name the user chose themselves.
+  const renames = { coding: ['Coding', 'Skill dev'], reading: ['Reading', 'Wellbeing'] };
+  for (const t of out.tags) {
+    if (renames[t.id] && t.name === renames[t.id][0]) t.name = renames[t.id][1];
+    if (t.id === 'other' && t.ask == null) t.ask = true;
+  }
   for (const x of out.sessions) {
     if (!x.id) x.id = `s${x.start}`;
     if (x.coins == null) x.coins = x.status === 'done' ? Math.round(x.planned / 60) : 0;
@@ -132,6 +138,10 @@ const fmtClock = (sec) => { sec = Math.max(0, Math.ceil(sec)); const m = Math.fl
 const fmtDur = (sec) => { const m = Math.round(sec / 60); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${pad(m % 60)}m`; };
 const dayKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const tagById = (id) => state.tags.find(t => t.id === id) || { id, name: id, color: '#adb5bd', species: 'oak' };
+// What a session was for: the typed label for "Other", otherwise the tag name.
+const aOrAn = (w) => (/^[aeiou]/i.test(w) ? 'an' : 'a');
+const sessionName = (x) => x.label || tagById(x.tag).name;
+const recentLabels = () => [...new Set(state.sessions.filter(x => x.label).reverse().map(x => x.label))].slice(0, 8);
 const speciesById = (id) => SPECIES.find(s => s.id === id) || SPECIES[0];
 const hash = (x, y) => { const v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return v - Math.floor(v); };
 
@@ -249,7 +259,13 @@ async function keepAwake(on) {
 
 function startSession() {
   const s = state.settings;
-  state.active = { start: now(), planned: s.duration * 60, tag: s.tag, species: tagById(s.tag).species || 'oak', awayAt: null, seenAt: now() };
+  const tag = tagById(s.tag);
+  const label = tag.ask ? (s.taskLabel || '').trim() : '';
+  if (tag.ask && !label) {
+    $('#tasklabel')?.focus();
+    return toast('Type what this session is for first.');
+  }
+  state.active = { start: now(), planned: s.duration * 60, tag: s.tag, species: tag.species || 'oak', awayAt: null, seenAt: now(), ...(label && { label }) };
   state.brk = null;
   save();
   audio.play(s.sound, s.volume);
@@ -265,7 +281,7 @@ function finish(status, reason) {
   // Time stops counting when you left, not when we noticed.
   const until = status === 'dead' && a.awayAt ? a.awayAt : now();
   const focused = Math.max(0, Math.min(a.planned, ((until - a.start) / 1000) * SPEED));
-  const rec = { id: `s${a.start}`, start: a.start, end: now(), planned: a.planned, focused, tag: a.tag, species: a.species, status, coins: status === 'done' ? Math.round(a.planned / 60) : 0 };
+  const rec = { id: `s${a.start}`, start: a.start, end: now(), planned: a.planned, focused, tag: a.tag, ...(a.label && { label: a.label }), species: a.species, status, coins: status === 'done' ? Math.round(a.planned / 60) : 0 };
   state.sessions.push(rec);
   state.active = null;
   const earned = rec.coins;
@@ -282,7 +298,7 @@ function finish(status, reason) {
     const mins = long ? state.settings.longBreak : state.settings.shortBreak;
     modal({
       title: `${speciesById(a.species).name} built!`, sprite: sp,
-      body: `<p>${fmtDur(a.planned)} of ${esc(tagById(a.tag).name)}. You earned <b>${earned} coins</b>.</p>${long ? '<p>4 sessions done today. Have a long break.</p>' : ''}`,
+      body: `<p>${fmtDur(a.planned)} of ${esc(sessionName(a))}. You earned <b>${earned} coins</b>.</p>${long ? '<p>4 sessions done today. Have a long break.</p>' : ''}`,
       actions: [
         { label: 'Skip', onClick: () => {} },
         { label: `${mins}m break`, primary: true, onClick: () => startBreak(mins) },
@@ -432,8 +448,7 @@ function renderFocus() {
   const sub = $('#subtitle', v), ctl = $('#controls', v);
 
   if (a) {
-    const t = tagById(a.tag);
-    sub.innerHTML = `Building a ${esc(speciesById(a.species).name.toLowerCase())} for <b>${esc(t.name)}</b>`;
+    sub.innerHTML = `Building ${aOrAn(speciesById(a.species).name)} ${esc(speciesById(a.species).name.toLowerCase())} for <b>${esc(sessionName(a))}</b>`;
     ctl.innerHTML = `
       <div id="warn" class="warn" hidden></div>
       <h2>Sound</h2>
@@ -464,6 +479,7 @@ function renderFocus() {
         <button class="btn step" id="plus">+</button>
       </div>
       <h2>What are you focusing on?</h2><div class="chips" id="tags"></div>
+      <div id="askwrap"></div>
       <p class="hint" id="buildhint"></p>
       <h2>Sound</h2><div class="chips" id="sounds"></div>
       <div class="actions"><button class="btn primary block" id="start">Plant</button></div>`;
@@ -481,7 +497,21 @@ function renderFocus() {
       tagsEl.append(c);
     }
     const cur = tagById(s.tag);
-    $('#buildhint', ctl).innerHTML = `${esc(cur.name)} builds a <b>${esc(speciesById(cur.species).name)}</b>. Change it in Shop or Settings.`;
+    if (cur.ask) {
+      const wrap = $('#askwrap', ctl);
+      wrap.innerHTML = `<label class="ask" for="tasklabel">What's this session for?</label>
+        <input type="text" id="tasklabel" maxlength="40" autocomplete="off" placeholder="For example: taxes, moving prep, side project" value="${esc(s.taskLabel || '')}">
+        <div class="chips recent"></div>`;
+      const inp = $('#tasklabel', wrap);
+      inp.oninput = () => { s.taskLabel = inp.value; save(); };
+      inp.onkeydown = (e) => { if (e.key === 'Enter') startSession(); };
+      for (const l of recentLabels()) {
+        const c = h(`<button class="chip small">${esc(l)}</button>`);
+        c.onclick = () => { inp.value = l; s.taskLabel = l; save(); };
+        $('.recent', wrap).append(c);
+      }
+    }
+    $('#buildhint', ctl).innerHTML = `${esc(cur.name)} builds ${aOrAn(speciesById(cur.species).name)} <b>${esc(speciesById(cur.species).name)}</b>. Change it in Shop or Settings.`;
     renderSoundChips($('#sounds', ctl), false);
     $('#start', ctl).onclick = startSession;
   }
@@ -541,7 +571,7 @@ function renderIslandView() {
   cv.onclick = (e) => {
     const r = cv.getBoundingClientRect();
     const s = cv._hit?.(e.clientX - r.left, e.clientY - r.top);
-    if (s) toast(`${s.status === 'dead' ? 'Withered' : speciesById(s.species).name}: ${fmtDur(s.focused)} of ${tagById(s.tag).name}, ${new Date(s.start).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`);
+    if (s) toast(`${s.status === 'dead' ? 'Withered' : speciesById(s.species).name}: ${fmtDur(s.focused)} of ${sessionName(s)}, ${new Date(s.start).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`);
   };
 }
 
@@ -593,7 +623,7 @@ function renderStats() {
   const vals = Array(w.buckets).fill(0);
   for (const s of done) vals[w.bucketOf(s.start)] += s.focused / 60;
   const byTag = {};
-  for (const s of done) byTag[s.tag] = (byTag[s.tag] || 0) + s.focused;
+  for (const s of done) { const k = s.label ? `${s.tag}\u0000${s.label}` : s.tag; byTag[k] = (byTag[k] || 0) + s.focused; }
   const tagRows = Object.entries(byTag).sort((a, b) => b[1] - a[1]);
   const maxTag = Math.max(1, ...tagRows.map(r => r[1]));
   const { current, best } = streaks();
@@ -609,7 +639,7 @@ function renderStats() {
     <h2>Minutes focused</h2>
     <div class="panel chart">${barChart(vals, w.bucketLabel)}</div>
     <h2>By tag</h2>
-    <div class="panel">${tagRows.length ? tagRows.map(([id, sec]) => { const t = tagById(id); return `<div class="tagbar"><span>${esc(t.name)}</span><div class="track"><div class="fill" style="width:${(sec / maxTag) * 100}%;background:${t.color}"></div></div><span class="n">${fmtDur(sec)}</span></div>`; }).join('') : '<div class="empty">No sessions in this range.</div>'}</div>
+    <div class="panel">${tagRows.length ? tagRows.map(([key, sec]) => { const [id, label] = key.split('\u0000'); const t = tagById(id); return `<div class="tagbar"><span>${esc(label || t.name)}</span><div class="track"><div class="fill" style="width:${(sec / maxTag) * 100}%;background:${t.color}"></div></div><span class="n">${fmtDur(sec)}</span></div>`; }).join('') : '<div class="empty">No sessions in this range.</div>'}</div>
     <h2>History</h2>
     <ul class="hist" id="hist"></ul>`;
   $('#sseg', v).onclick = (e) => { const r = e.target.dataset.r; if (r) { statRange = r; statOffset = 0; renderStats(); } };
@@ -619,7 +649,7 @@ function renderStats() {
   if (!list.length) hist.append(h('<li class="empty" style="justify-content:center">Nothing yet.</li>'));
   for (const s of [...list].reverse().slice(0, 100)) {
     const t = tagById(s.tag);
-    const li = h(`<li><div class="main"><div>${esc(speciesById(s.species).name)} <span class="tagname"><i style="background:${t.color}"></i>${esc(t.name)}</span></div>
+    const li = h(`<li><div class="main"><div>${esc(speciesById(s.species).name)} <span class="tagname"><i style="background:${t.color}"></i>${esc(sessionName(s))}</span></div>
       <div class="when">${new Date(s.start).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div></div>
       <div class="dur ${s.status === 'dead' ? 'dead-txt' : ''}">${s.status === 'dead' ? 'Withered, ' : ''}${fmtDur(s.focused)}</div></li>`);
     const cv = spriteCanvas(s.status === 'dead' ? 'dead' : s.species, 2); cv.classList.add('px');
@@ -643,7 +673,7 @@ function renderShop() {
     const cv = spriteCanvas(sp.id, 4); cv.classList.add('px'); li.prepend(cv);
     if (owned) {
       const sel = h(`<select aria-label="Give ${sp.name} to a tag"><option value="">Give to…</option>${state.tags.filter(t => t.species !== sp.id).map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>`);
-      sel.onchange = () => { const t = tagById(sel.value); t.species = sp.id; save(); toast(`${t.name} now builds a ${sp.name.toLowerCase()}`); renderShop(); };
+      sel.onchange = () => { const t = tagById(sel.value); t.species = sp.id; save(); toast(`${t.name} now builds ${aOrAn(sp.name)} ${sp.name.toLowerCase()}`); renderShop(); };
       li.append(sel);
     } else {
       const btn = h(`<button class="btn small">Unlock</button>`);
