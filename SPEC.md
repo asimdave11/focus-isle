@@ -8,7 +8,7 @@ A Forest-style focus timer. Focus for a set time and a pixel-art building or tre
 | Devices | MacBook + iPhone |
 | Approach | Installable web app (PWA) |
 | What grows | Pixel-art world (island with trees and buildings) |
-| Strictness | Dies if you leave the app for more than ~10 s |
+| Strictness | Dies if you leave the app for more than ~10 s. **Changed 2026-10-11:** off by default, so you can use any app or window your task needs; only Give up withers. Strict mode is an optional setting |
 | v1 extras | Tags, stats & history, streaks & unlocks, sounds + breaks |
 | Hosting | GitHub Pages |
 | Sync | None in v1. Data stays on each device; JSON export/import |
@@ -16,11 +16,12 @@ A Forest-style focus timer. Focus for a set time and a pixel-art building or tre
 ## MVP scope
 - **Focus**: duration 5–180 min, pick a tag, countdown, the tag's object builds up row by row.
 - **Tag → object**: each tag builds its own object (Study → Library, Work → Cottage, Skill dev → Windmill, Wellbeing → Cherry, Other → Oak). Change it in Shop or Settings. The island legend counts per tag. **Other** asks what the session is for (required, with recent answers to pick from); that label is saved with the session and shown in history and stats.
-- **Strict mode**: the page goes hidden (app switch or tab switch) for longer than the grace period, and the session dies. The Mac option also counts window blur (switching to another app).
+- **Strict mode** (optional, off by default): the page goes hidden (app switch or tab switch) for longer than the grace period, and the session dies. The Mac option also counts window blur (switching to another app).
 - **Island**: every finished session is placed on an island that grows organically, filtered by Today / Week / Month / All.
 - **Stats**: totals, bar chart by hour/day/month, tag breakdown, success vs dead, history.
 - **Streaks & coins**: 1 coin per focused minute. Streak = consecutive days with at least one finished session. Spend coins in the Shop to unlock objects (Pine, Lighthouse, Castle) and give them to a tag.
 - **Sounds**: rain, waves, brown noise and birds, generated with WebAudio (no assets). A chime at the end.
+- **Notifications**: when a session or break ends while you're in another app (permission requested on the first Plant).
 - **Breaks**: after a session, offer a short break (or a long break every 4th session).
 - **PWA**: works offline and installs via Add to Home Screen. Keeps the screen awake during a session.
 

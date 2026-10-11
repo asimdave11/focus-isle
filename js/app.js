@@ -25,7 +25,7 @@ function freshState() {
     sessions: [], purchases: [], coinAdjust: 0, unlocked: [...FREE], tags: DEFAULT_TAGS.map(t => ({ ...t })),
     settings: {
       duration: 25, tag: 'study', sound: 'none', volume: 0.5,
-      grace: 10, desktopBlur: true, shortBreak: 5, longBreak: 15, autoDim: false,
+      strict: false, grace: 10, desktopBlur: true, shortBreak: 5, longBreak: 15, autoDim: false,
     },
     active: null, // { start, planned, tag, species, awayAt, seenAt }
     brk: null,    // { start, planned }
@@ -390,6 +390,7 @@ function startSession() {
   save();
   audio.play(s.sound, s.volume);
   keepAwake(true);
+  if (!s.strict && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
   if (s.autoDim) setTimeout(() => state.active && dim(true), 1500);
   renderFocus();
   loop();
@@ -443,6 +444,7 @@ function finish(status, reason) {
   sp.classList.add('px');
   if (status === 'done') {
     audio.chime();
+    notify(`${speciesById(a.species).name} built!`, `${fmtDur(a.planned)} of ${sessionName(a)} done. Time for a break.`);
     const doneToday = state.sessions.filter(x => x.status === 'done' && dayKey(x.start) === dayKey(now())).length;
     const long = doneToday % 4 === 0;
     const mins = long ? state.settings.longBreak : state.settings.shortBreak;
@@ -460,6 +462,13 @@ function finish(status, reason) {
   }
 }
 
+function notify(title, body) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!document.hidden && document.hasFocus()) return; // you're looking at the app already
+  const opts = { body, icon: 'icons/icon-192.png', tag: 'focus-isle' };
+  navigator.serviceWorker?.ready.then(r => r.showNotification(title, opts)).catch(() => { try { new Notification(title, opts); } catch {} });
+}
+
 function startBreak(mins) {
   state.brk = { start: now(), planned: mins * 60 };
   save(); renderFocus(); loop();
@@ -475,8 +484,10 @@ function tick() {
   const a = state.active;
   if (a) {
     // If the page was frozen (laptop asleep, app killed) we never saw it leave; the last heartbeat tells us.
-    if (!a.awayAt && a.seenAt && now() - a.seenAt > (state.settings.grace + 6) * 1000) a.awayAt = a.seenAt;
-    if (!a.awayAt && (!a.seenAt || now() - a.seenAt > 5000)) { a.seenAt = now(); save(); }
+    const strict = state.settings.strict;
+    if (!strict && a.awayAt) { a.awayAt = null; save(); }
+    if (strict && !a.awayAt && a.seenAt && now() - a.seenAt > (state.settings.grace + 6) * 1000) a.awayAt = a.seenAt;
+    if (strict && !a.awayAt && (!a.seenAt || now() - a.seenAt > 5000)) { a.seenAt = now(); save(); }
     if (a.awayAt) {
       const awaySec = (now() - a.awayAt) / 1000;
       const left = state.settings.grace - awaySec;
@@ -501,6 +512,7 @@ function tick() {
     const remain = b.planned - elapsed(b);
     if (remain <= 0) {
       state.brk = null; save(); audio.chime(); renderFocus();
+      notify('Break over', 'Ready for the next session?');
       document.title = 'Focus Isle';
       return toast('Break over. Ready to focus?');
     }
@@ -546,13 +558,14 @@ function placeSun(p) {
 // Strict mode: leaving the app starts the grace countdown.
 function leave() {
   const a = state.active;
-  if (!a || a.awayAt) return;
+  if (!a || a.awayAt || !state.settings.strict) return;
   a.awayAt = now(); save();
   if (IS_DESKTOP) tick();
 }
 function back() {
   const a = state.active;
   if (!a || !a.awayAt) return;
+  if (!state.settings.strict) { a.awayAt = null; save(); return tick(); }
   if (IS_DESKTOP && state.settings.desktopBlur && !document.hasFocus()) return;
   const away = (now() - a.awayAt) / 1000;
   if (away > state.settings.grace) return finish('dead', `You were away for ${away < 120 ? `${Math.round(away)} seconds` : fmtDur(away)}.`);
@@ -562,7 +575,7 @@ function back() {
 }
 document.addEventListener('visibilitychange', () => (document.hidden ? leave() : back()));
 window.addEventListener('pagehide', leave);
-window.addEventListener('blur', () => { if (IS_DESKTOP && state.settings.desktopBlur) leave(); });
+window.addEventListener('blur', () => { if (IS_DESKTOP && state.settings.strict && state.settings.desktopBlur) leave(); });
 window.addEventListener('focus', back);
 
 function dim(on) {
@@ -622,7 +635,7 @@ function renderFocus() {
     ctl.innerHTML = `<div class="actions"><button class="btn ghost block" id="skipbreak">Skip break</button></div>`;
     $('#skipbreak', ctl).onclick = () => { state.brk = null; save(); renderFocus(); };
   } else {
-    sub.textContent = IS_DESKTOP && s.desktopBlur ? 'Stay in this window, or it withers.' : 'Leave the app and it withers.';
+    sub.textContent = !s.strict ? 'Use any app or window you need. The timer keeps running.' : IS_DESKTOP && s.desktopBlur ? 'Strict mode: stay in this window, or it withers.' : 'Strict mode: leave the app and it withers.';
     ctl.innerHTML = `
       <div class="duration-row">
         <button class="btn step" id="minus">−</button>
@@ -846,11 +859,15 @@ function renderSettings() {
   const s = state.settings;
   v.innerHTML = `
     <h1>Settings</h1>
-    <h2>Strict mode</h2>
-    <div class="setting"><div>Grace period<div class="desc">How long you can be away before it withers.</div></div>
+    <h2>Focus rules</h2>
+    <div class="setting"><div>Wither if I leave the app<div class="desc">Off: use any app or window you need, and only Give up withers it. On: leaving the app withers it, like Forest.</div></div>
+      <input type="checkbox" class="switch" id="strict" ${s.strict ? 'checked' : ''}></div>
+    ${s.strict ? `<div class="setting"><div>Grace period<div class="desc">How long you can be away before it withers.</div></div>
       <select id="grace">${[5, 10, 20, 30, 60].map(n => `<option ${n === s.grace ? 'selected' : ''} value="${n}">${n}s</option>`).join('')}</select></div>
     <div class="setting"><div>Mac: count switching apps<div class="desc">On: clicking into another app counts as leaving. Off: only hiding or minimizing the window counts.</div></div>
-      <input type="checkbox" class="switch" id="blur" ${s.desktopBlur ? 'checked' : ''}></div>
+      <input type="checkbox" class="switch" id="blur" ${s.desktopBlur ? 'checked' : ''}></div>` : ''}
+    <div class="setting"><div>Notify me when time's up<div class="desc">${!('Notification' in window) ? 'Not supported in this browser.' : Notification.permission === 'granted' ? 'On. You get a notification when a session or break ends.' : Notification.permission === 'denied' ? 'Blocked. Allow notifications for this site in your browser settings.' : 'Get a notification when a session or break ends, even while you use another app.'}</div></div>
+      ${'Notification' in window && Notification.permission === 'default' ? '<button class="btn ghost small" id="notifyon">Turn on</button>' : ''}</div>
     <div class="setting"><div>Auto-dim on start<div class="desc">Black screen while you focus (iPhone). Tap to wake.</div></div>
       <input type="checkbox" class="switch" id="autodim" ${s.autoDim ? 'checked' : ''}></div>
     <h2>Breaks</h2>
@@ -871,9 +888,12 @@ function renderSettings() {
     </div>
     <input type="file" id="importfile" accept="application/json" hidden>
     <div class="actions"><button class="btn danger small" id="reset">Reset everything</button></div>
-    <p style="color:var(--muted);font-size:12px;margin-top:20px">iPhone: open in Safari, then Share → Add to Home Screen. Locking the phone counts as leaving, so use Dim instead.</p>`;
+    <p class="small" style="color:var(--mist);margin-top:20px">iPhone: open in Safari, then Share → Add to Home Screen. Mac: in Chrome, ⋮ → Cast, save, and share → Install page as app.${s.strict ? ' In strict mode, locking the phone counts as leaving, so use Dim instead.' : ''}</p>`;
   const bind = (id, key, conv = (x) => x) => { $(id, v).onchange = (e) => { s[key] = conv(e.target.type === 'checkbox' ? e.target.checked : e.target.value); save(); }; };
-  bind('#grace', 'grace', Number); bind('#blur', 'desktopBlur'); bind('#autodim', 'autoDim');
+  $('#strict', v).onchange = (e) => { s.strict = e.target.checked; if (state.active) { state.active.seenAt = now(); state.active.awayAt = null; } save(); renderSettings(); };
+  if (s.strict) { bind('#grace', 'grace', Number); bind('#blur', 'desktopBlur'); }
+  bind('#autodim', 'autoDim');
+  $('#notifyon', v)?.addEventListener('click', () => Notification.requestPermission().then(renderSettings).catch(() => {}));
   bind('#sb', 'shortBreak', Number); bind('#lb', 'longBreak', Number);
   $('#vol', v).oninput = (e) => { s.volume = +e.target.value; save(); if (state.active) audio.setVolume(s.volume); };
 
@@ -1091,7 +1111,7 @@ navigator.storage?.persist?.().catch(() => {});
   if (!b || (now() - b.at > 20 * 3600e3 && state.sessions.length >= b.data.sessions.length)) writeBackup('daily', state);
 })();
 if (!readKey(KEY) || storageIssues.length) save();
-if (state.active && !state.active.awayAt && state.active.seenAt && now() - state.active.seenAt > (state.settings.grace + 6) * 1000) state.active.awayAt = state.active.seenAt;
+if (state.settings.strict && state.active && !state.active.awayAt && state.active.seenAt && now() - state.active.seenAt > (state.settings.grace + 6) * 1000) state.active.awayAt = state.active.seenAt;
 if (state.active?.awayAt) back(); // resumed after being killed in the background
 if (state.active && !state.active.awayAt && elapsed(state.active) >= state.active.planned) finish('done');
 show('focus');
