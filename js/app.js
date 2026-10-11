@@ -975,10 +975,19 @@ function updateSyncChip() {
 }
 
 // ---------- Guided sync setup ----------
-const TOKEN_URL = 'https://github.com/settings/personal-access-tokens/new?' + new URLSearchParams({
-  name: 'Focus Isle', description: 'Lets the Focus Isle app sync your island and write daily notes to focus-isle-data.',
-  expires_in: '366', contents: 'write',
-});
+// GitHub token names must be unique per account, so each device and moment gets its own name.
+function tokenUrl() {
+  const ua = navigator.userAgent;
+  const device = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ? 'iPad'
+    : /Android/.test(ua) ? 'Android' : /Mac/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : 'device';
+  const d = new Date();
+  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return 'https://github.com/settings/personal-access-tokens/new?' + new URLSearchParams({
+    name: `Focus Isle ${device} ${stamp}`, // at most 40 characters
+    description: 'Lets the Focus Isle app sync your island and write daily notes to focus-isle-data.',
+    expires_in: '366', contents: 'write',
+  });
+}
 
 function openSetup(step = 1) {
   $('#setup')?.remove();
@@ -1008,7 +1017,7 @@ function openSetup(step = 1) {
           <li>Under <b>Repository access</b>, choose <b>Only select repositories</b> and pick <b>focus-isle-data</b>.</li>
           <li>Tap <b>Generate token</b> at the bottom, then <b>copy</b> it.</li>
         </ol>
-        <div class="actions"><a class="btn primary" href="${TOKEN_URL}" target="_blank" rel="noopener" data-open>Open GitHub</a></div>
+        <div class="actions"><a class="btn primary" href="${tokenUrl()}" target="_blank" rel="noopener" data-open>Open GitHub</a></div>
         <div class="actions two"><button class="btn ghost small" data-go="1">Back</button><button class="btn ghost small" data-go="3">I copied it</button></div>`;
       $('[data-open]', box).addEventListener('click', () => setTimeout(() => steps[3](), 400));
     },
