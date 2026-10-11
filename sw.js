@@ -1,6 +1,6 @@
 // Offline cache. Bump VERSION when shipping changes.
-const VERSION = 'focusisle-v6';
-const ASSETS = ['./', 'index.html', 'style.css', 'js/app.js', 'js/sprites.js', 'js/audio.js',
+const VERSION = 'focusisle-v8';
+const ASSETS = ['./', 'index.html', 'style.css', 'js/app.js', 'js/sprites.js', 'js/audio.js', 'js/sync.js',
   'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -20,7 +20,7 @@ self.addEventListener('fetch', (e) => {
     return;
   }
   if (url.origin !== location.origin) return;
-  e.respondWith(fetch(e.request).then((res) => {
+  e.respondWith(fetch(e.request, { cache: 'no-cache' }).then((res) => {
     const copy = res.clone(); caches.open(VERSION).then((c) => c.put(e.request, copy)); return res;
   }).catch(() => caches.match(e.request, { ignoreSearch: true })));
 });

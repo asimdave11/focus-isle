@@ -28,7 +28,6 @@ A Forest-style focus timer. Focus for a set time and a pixel-art building or tre
 A web app can't tell **locking the phone** apart from **switching apps**. Both kill the tree. The app keeps the screen awake and has a dim "deep focus" mode, so you never need to lock.
 
 ## Phase 2 (later)
-- Sync between devices (Supabase/Firebase + login)
 - Friends and plant-together
 - Native SwiftUI wrapper (Screen Time API app blocking)
 
@@ -51,3 +50,14 @@ Data lives in `localStorage` on each device, under the key `focusisle.v1`.
 - **Persistence:** `navigator.storage.persist()` is requested, and its status is shown in Settings.
 - **iPhone:** a Safari tab can lose script storage after 7 days without a visit, and the Home Screen app has separate storage. A banner tells Safari-tab users to install first.
 - **Tested:** migration, close and reopen, corruption → restore, two tabs, killed session, failed save, and reset → restore (twice).
+
+## Sync and Obsidian notes
+- **Where:** the private repo `asimdave11/focus-isle-data`. `focus-isle.json` holds the shared history (sessions, purchases, unlocks, tags). Device settings and a running session never sync.
+- **Token:** a fine-grained GitHub token, limited to that repo with Contents read/write, pasted once per device. It is stored under `focusisle.sync`, separate from the app data, so it never ends up in an export.
+- **When it syncs:** when the app opens, after each session, 4 s after a change, when you come back to the app (at most every 30 s), and when the connection returns.
+- **Merging:** sessions and purchases are combined by id. A new, empty device adopts the repo. When the epochs differ (after a reset, import or restore), the newer one wins and the losing side is backed up first; a deliberate reset is never undone. Tags follow the newest edit (`tagsAt`). A write rejected as stale (409) is re-read, merged and retried. If nothing changed, nothing is committed.
+- **Daily notes:** `notes/YYYY-MM-DD Focus.md`, with frontmatter (date, focus_minutes, sessions, withered), a session table and totals per task. Times use a fixed 24-hour format, so devices don't keep rewriting each other's notes.
+- **Mac → Obsidian:** `~/bin/focus-isle-obsidian.sh`, run every 10 minutes by `~/Library/LaunchAgents/com.asimdave.focus-isle-obsidian.plist`, pulls a clone in `~/.focus-isle-data` and copies the notes into `~/Documents/Obsidian Vault/Focus Isle/`. Log: `~/Library/Logs/focus-isle-obsidian.log`.
+- **Guided setup:** on first open (when sync is off and setup hasn't been done or skipped), a 3-step flow appears before anything else: why to sync → "Open GitHub" with a pre-filled token form (name, description, 366-day expiry, Contents: write; the user only picks the repo) → paste (with a Paste from clipboard button) → connected, showing how many sessions were loaded. A "Not synced" (or "Sync paused") marker in the top bar reopens it.
+- **After every session:** the finish popup shows "Saving to your repo…" and then "Saved to your repo". With sync off it says "Saved on this device only" and offers one-tap **Save backup file** and **Set up sync** buttons.
+- **Testing:** `?api=http://127.0.0.1:PORT` points the app at a local mock API, and only works when the app itself runs on localhost.

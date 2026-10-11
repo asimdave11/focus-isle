@@ -1,5 +1,6 @@
 import { SPECIES, drawSprite, drawGrowing, spriteCanvas, iconCanvas } from './sprites.js';
 import * as audio from './audio.js';
+import * as sync from './sync.js';
 
 // ---------- State ----------
 const KEY = 'focusisle.v1';
@@ -20,6 +21,7 @@ const FREE = SPECIES.filter(s => s.cost === 0).map(s => s.id);
 function freshState() {
   return {
     epoch: 'e' + Date.now().toString(36), // changes on reset/import, so merges never resurrect wiped data
+    epochAt: Date.now(), tagsAt: 0,
     sessions: [], purchases: [], coinAdjust: 0, unlocked: [...FREE], tags: DEFAULT_TAGS.map(t => ({ ...t })),
     settings: {
       duration: 25, tag: 'study', sound: 'none', volume: 0.5,
@@ -66,6 +68,8 @@ function normalize(src) {
   }
   delete out.coins;
   if (!src.epoch) out.epoch = 'e0';
+  if (out.epochAt == null) out.epochAt = 0;
+  if (out.tagsAt == null) out.tagsAt = 0;
   return out;
 }
 const earnedOf = (st) => st.sessions.reduce((t, x) => t + (x.coins || 0), 0);
@@ -107,7 +111,11 @@ function save() {
       for (const x of disk.purchases || []) if (!bought.has(x.id)) state.purchases.push(x);
       state.unlocked = [...new Set([...state.unlocked, ...(disk.unlocked || [])])];
     }
+    const tagsJson = JSON.stringify(state.tags);
+    if (save.lastTags && save.lastTags !== tagsJson) state.tagsAt = Date.now();
+    save.lastTags = tagsJson;
     localStorage.setItem(KEY, JSON.stringify(state));
+    if (!state.active) scheduleSync();
     if (saveFailed) { saveFailed = false; $('#savebar')?.remove(); }
     return true;
   } catch {
@@ -116,6 +124,118 @@ function save() {
       document.body.append(h(`<div id="savebar" role="alert">Focus Isle couldn't save. Storage on this device may be full or blocked, for example in Private Browsing. Open Settings and export your data so you don't lose it.</div>`));
     }
     return false;
+  }
+}
+
+function newEpoch() { state.epoch = 'e' + Date.now().toString(36); state.epochAt = Date.now(); }
+
+// ---------- Sync (private GitHub repo) ----------
+// Only the shared history travels: sessions, purchases, unlocks and tags.
+// Device settings and a running session stay on each device.
+function syncPayload() {
+  return {
+    app: 'focus-isle', version: 2,
+    epoch: state.epoch, epochAt: state.epochAt, tagsAt: state.tagsAt, coinAdjust: state.coinAdjust,
+    unlocked: state.unlocked, tags: state.tags, purchases: state.purchases, sessions: state.sessions,
+  };
+}
+// Returns true if local data changed.
+function mergeRemote(r) {
+  if (!r || !Array.isArray(r.sessions)) return false;
+  const before = JSON.stringify(syncPayload());
+  const localEmpty = !state.sessions.length && !state.purchases.length;
+  const remoteNewerEpoch = r.epoch !== state.epoch && (r.epochAt || 0) > (state.epochAt || 0);
+  // A new, empty device adopts the repo; a device you deliberately reset keeps its reset.
+  if (r.epoch !== state.epoch && ((localEmpty && !state.wiped) || remoteNewerEpoch)) {
+    if (!localEmpty) writeBackup('before sync replaced it', state);
+    Object.assign(state, {
+      wiped: false, epoch: r.epoch, epochAt: r.epochAt || 0, tagsAt: r.tagsAt || 0, coinAdjust: r.coinAdjust || 0,
+      sessions: r.sessions, purchases: r.purchases || [], tags: r.tags?.length ? r.tags : state.tags,
+      unlocked: [...new Set([...FREE, ...(r.unlocked || [])])],
+    });
+    state = normalize(state);
+    save.lastTags = JSON.stringify(state.tags);
+  } else if (r.epoch === state.epoch) {
+    const have = new Set(state.sessions.map(x => x.id));
+    const extra = r.sessions.filter(x => x.id && !have.has(x.id));
+    if (extra.length) { state.sessions.push(...extra); state.sessions.sort((a, b) => a.start - b.start); }
+    const bought = new Set(state.purchases.map(x => x.id));
+    for (const x of r.purchases || []) if (!bought.has(x.id)) state.purchases.push(x);
+    state.unlocked = [...new Set([...state.unlocked, ...(r.unlocked || [])])];
+    if ((r.tagsAt || 0) > (state.tagsAt || 0) && r.tags?.length) { state.tags = r.tags; state.tagsAt = r.tagsAt; save.lastTags = JSON.stringify(r.tags); }
+  } // else: this device reset or imported more recently, so its data wins on push
+  return JSON.stringify(syncPayload()) !== before;
+}
+
+// Daily Obsidian notes, regenerated from the session history.
+function noteFor(day, list) {
+  const done = list.filter(x => x.status === 'done');
+  const total = done.reduce((t, x) => t + x.focused, 0);
+  const d = new Date(day + 'T12:00:00');
+  const byTask = {};
+  for (const x of done) byTask[sessionName(x)] = (byTask[sessionName(x)] || 0) + x.focused;
+  const cell = (v) => String(v).replace(/\|/g, '\\|');
+  const hhmm = (t) => { const dt = new Date(t); return `${pad(dt.getHours())}:${pad(dt.getMinutes())}`; };
+  const rows = list.map(x => `| ${hhmm(x.start)} | ${cell(sessionName(x))} | ${Math.round(x.focused / 60)} | ${x.status === 'done' ? `${speciesById(x.species).name} built` : 'Withered'} |`);
+  return [
+    '---', `date: ${day}`, `focus_minutes: ${Math.round(total / 60)}`, `sessions: ${done.length}`, `withered: ${list.length - done.length}`, 'tags: [focus-isle]', '---',
+    `# Focus on ${d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}`, '',
+    `${fmtDur(total)} focused across ${done.length} ${done.length === 1 ? 'session' : 'sessions'}${list.length - done.length ? `, and ${list.length - done.length} withered` : ''}.`, '',
+    '| Time | Task | Minutes | Result |', '|---|---|---|---|', ...rows, '',
+    '## By task', ...Object.entries(byTask).sort((a, b) => b[1] - a[1]).map(([k, v]) => `- ${k}: ${fmtDur(v)}`), '',
+    '_Written by Focus Isle. Edits here are replaced on the next sync._', '',
+  ].join('\n');
+}
+const strHash = (str) => { let h1 = 0; for (let i = 0; i < str.length; i++) h1 = (h1 * 31 + str.charCodeAt(i)) | 0; return h1.toString(36); };
+
+async function syncNotes() {
+  const byDay = {};
+  for (const x of state.sessions) (byDay[dayKey(x.start)] ||= []).push(x);
+  const hashes = { ...(sync.getCfg().noteHashes || {}) };
+  for (const [day, list] of Object.entries(byDay)) {
+    const text = noteFor(day, list);
+    const hsh = strHash(text);
+    if (hashes[day] === hsh) continue;
+    const path = `notes/${day} Focus.md`;
+    const cur = await sync.getFile(path);
+    if (!cur || cur.text !== text) await sync.putFile(path, text, cur?.sha, `Note for ${day}`);
+    hashes[day] = hsh;
+    sync.setCfg({ noteHashes: hashes });
+  }
+}
+
+let syncing = false, syncAgain = false, syncTimer = null;
+function scheduleSync(delay = 4000) {
+  if (!sync.isOn()) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => syncNow('change'), delay);
+}
+async function syncNow(reason = 'sync') {
+  if (!sync.isOn()) return;
+  if (syncing) { syncAgain = true; return; }
+  syncing = true;
+  try {
+    for (let attempt = 0; ; attempt++) {
+      const remote = await sync.getFile(sync.DATA_PATH);
+      let parsed = null;
+      try { parsed = remote ? JSON.parse(remote.text) : null; } catch {}
+      if (parsed && mergeRemote(parsed)) { save(); if (!state.active) renderAll(); }
+      const out = JSON.stringify(syncPayload(), null, 1);
+      if (remote && remote.text === out) break;
+      try { await sync.putFile(sync.DATA_PATH, out, remote?.sha, `Sync after ${reason}`); break; }
+      catch (e) { if ((e.status === 409 || e.status === 422) && attempt < 3) continue; throw e; }
+    }
+    await syncNotes();
+    sync.setCfg({ lastSyncAt: Date.now(), lastError: null });
+    document.dispatchEvent(new CustomEvent('synced', { detail: { ok: true } }));
+  } catch (e) {
+    sync.setCfg({ lastError: e.message || 'Sync failed.', lastErrorAt: Date.now() });
+    document.dispatchEvent(new CustomEvent('synced', { detail: { ok: false, error: e.message || 'Sync failed.', auth: e.status === 401 || e.status === 403 } }));
+  } finally {
+    syncing = false;
+    if (currentView === 'settings') renderSyncInfo();
+    updateSyncChip();
+    if (syncAgain) { syncAgain = false; syncNow(reason); }
   }
 }
 
@@ -275,6 +395,35 @@ function startSession() {
   loop();
 }
 
+// The session popup says where the session went, and offers a one-tap backup when sync is off.
+function withSaveStatus(html) {
+  const box = h(`<div>${html}<div class="savestatus"></div></div>`);
+  const st = $('.savestatus', box);
+  if (sync.isOn()) {
+    st.innerHTML = '<span class="dot busy"></span>Saving to your repo…';
+    const on = (e) => {
+      document.removeEventListener('synced', on);
+      st.innerHTML = e.detail.ok ? '<span class="dot ok"></span>Saved to your repo. Your other devices will have it.'
+        : `<span class="dot bad"></span>Saved on this device. ${esc(e.detail.error)}`;
+    };
+    document.addEventListener('synced', on);
+  } else {
+    st.innerHTML = `<span class="dot bad"></span>Saved on this device only.
+      <div class="actions two"><button class="btn ghost small" data-act="export">Save backup file</button><button class="btn ghost small" data-act="setup">Set up sync</button></div>`;
+    $('[data-act=export]', st).onclick = () => { exportFile(); $('[data-act=export]', st).textContent = 'Saved'; };
+    $('[data-act=setup]', st).onclick = () => { st.closest('.modal-back')?.remove(); openSetup(1); };
+  }
+  return box;
+}
+
+function exportFile() {
+  state.lastExportAt = now(); save();
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = `focus-isle-${dayKey(now())}.json`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 function finish(status, reason) {
   const a = state.active;
   if (!a) return;
@@ -288,6 +437,7 @@ function finish(status, reason) {
   save();
   audio.stop(); keepAwake(false); dim(false);
   document.title = 'Focus Isle';
+  syncNow('session');
   renderFocus();
   const sp = spriteCanvas(status === 'done' ? a.species : 'dead', 6);
   sp.classList.add('px');
@@ -298,7 +448,7 @@ function finish(status, reason) {
     const mins = long ? state.settings.longBreak : state.settings.shortBreak;
     modal({
       title: `${speciesById(a.species).name} built!`, sprite: sp,
-      body: `<p>${fmtDur(a.planned)} of ${esc(sessionName(a))}. You earned <b>${earned} coins</b>.</p>${long ? '<p>4 sessions done today. Have a long break.</p>' : ''}`,
+      body: withSaveStatus(`<p>${fmtDur(a.planned)} of ${esc(sessionName(a))}. You earned <b>${earned} coins</b>.</p>${long ? '<p>4 sessions done today. Have a long break.</p>' : ''}`),
       actions: [
         { label: 'Skip', onClick: () => {} },
         { label: `${mins}m break`, primary: true, onClick: () => startBreak(mins) },
@@ -306,7 +456,7 @@ function finish(status, reason) {
     });
   } else {
     audio.thud();
-    modal({ title: `Your ${speciesById(a.species).name.toLowerCase()} withered`, sprite: sp, body: `<p>${esc(reason)}</p><p>You focused ${fmtDur(focused)}.</p>`, actions: [{ label: 'Try again', primary: true }] });
+    modal({ title: `Your ${speciesById(a.species).name.toLowerCase()} withered`, sprite: sp, body: withSaveStatus(`<p>${esc(reason)}</p><p>You focused ${fmtDur(focused)}.</p>`), actions: [{ label: 'Try again', primary: true }] });
   }
 }
 
@@ -436,6 +586,7 @@ function renderFocus() {
       <div class="cloud one" aria-hidden="true"></div><div class="cloud two" aria-hidden="true"></div>
       <div class="hud">
         <span class="streak" title="Days in a row with a finished session">${current} day streak</span>
+        <button class="syncchip" id="syncchip" hidden></button>
         <span class="coins" title="Coins">${coins()} coins</span>
       </div>
       <div class="scene"><canvas id="scene" class="px" aria-label="Your island"></canvas></div>
@@ -515,6 +666,7 @@ function renderFocus() {
     renderSoundChips($('#sounds', ctl), false);
     $('#start', ctl).onclick = startSession;
   }
+  updateSyncChip();
   tick.lastStep = -1;
   drawScene(a ? elapsed(a) / a.planned : 0);
   if (a || b) loop();
@@ -709,6 +861,8 @@ function renderSettings() {
     <h2>Tags &amp; what they build</h2>
     <div id="tagedit"></div>
     <button class="btn ghost small" id="addtag">+ Add tag</button>
+    <h2>Sync and Obsidian notes</h2>
+    <div id="syncinfo" class="datainfo"></div>
     <h2>Your data</h2>
     <div id="datainfo" class="datainfo"></div>
     <div class="actions two">
@@ -746,12 +900,9 @@ function renderSettings() {
     save(); renderSettings();
   };
   renderDataInfo($('#datainfo', v));
+  renderSyncInfo();
   $('#export', v).onclick = () => {
-    state.lastExportAt = now(); save();
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = `focus-isle-${dayKey(now())}.json`; a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    exportFile();
     renderDataInfo($('#datainfo', v));
   };
   $('#import', v).onclick = () => $('#importfile', v).click();
@@ -761,14 +912,139 @@ function renderSettings() {
       if (!Array.isArray(data.sessions)) throw new Error();
       modal({
         title: 'Import data?', body: `<p>${data.sessions.length} sessions. This replaces what's on this device.</p>`,
-        actions: [{ label: 'Cancel' }, { label: 'Import', primary: true, onClick: () => { writeBackup('before import', state); state = normalize(data); state.epoch = 'e' + now().toString(36); save(); toast('Imported. Your previous data is in the backup.'); renderAll(); } }],
+        actions: [{ label: 'Cancel' }, { label: 'Import', primary: true, onClick: () => { writeBackup('before import', state); state = normalize(data); newEpoch(); save(); toast('Imported. Your previous data is in the backup.'); renderAll(); } }],
       });
     } catch { toast('That file is not a Focus Isle export.'); }
   };
   $('#reset', v).onclick = () => modal({
     title: 'Reset everything?', body: '<p>Clears all sessions, coins and unlocks on this device. A backup is kept, and you can restore it from Settings.</p>',
-    actions: [{ label: 'Cancel', primary: true }, { label: 'Reset', danger: true, onClick: () => { writeBackup('before reset', state); state = freshState(); save(); renderAll(); toast('Reset. You can restore it from the backup in Settings.'); } }],
+    actions: [{ label: 'Cancel', primary: true }, { label: 'Reset', danger: true, onClick: () => { writeBackup('before reset', state); state = freshState(); state.wiped = true; save(); renderAll(); toast('Reset. You can restore it from the backup in Settings.'); } }],
   });
+}
+
+function renderSyncInfo() {
+  const el = $('#syncinfo');
+  if (!el) return;
+  const c = sync.getCfg();
+  const ago = (t) => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+  if (sync.isOn()) {
+    el.innerHTML = `
+      <p>Saving to the private repo <b>${esc(c.repo)}</b> after every session, and loading from it whenever you open the app. Daily notes go to its <b>notes</b> folder.</p>
+      <p>${c.lastError ? `<span class="dead-txt">${esc(c.lastError)}</span>` : c.lastSyncAt ? `Last synced ${ago(c.lastSyncAt)}.` : 'Syncing for the first time…'}</p>
+      <div class="actions two"><button class="btn ghost small" id="syncnow">Sync now</button><button class="btn ghost small" id="syncoff">Disconnect</button></div>`;
+    $('#syncnow', el).onclick = () => { $('#syncnow', el).textContent = 'Syncing…'; syncNow('manual'); };
+    $('#syncoff', el).onclick = () => modal({
+      title: 'Disconnect this device?', body: '<p>Removes the token from this device. Your data stays here and in the repo.</p>',
+      actions: [{ label: 'Cancel', primary: true }, { label: 'Disconnect', danger: true, onClick: () => { sync.disconnect(); renderSyncInfo(); } }],
+    });
+    return;
+  }
+  el.innerHTML = `
+    <p>Not set up. Your island is only on this device. Sync keeps it on every device and writes a daily note for Obsidian, saved to a private GitHub repo that only you can see.</p>
+    <div class="actions"><button class="btn primary small" id="syncsetup">Set up sync</button></div>`;
+  $('#syncsetup', el).onclick = () => openSetup(1);
+}
+
+function updateSyncChip() {
+  const chip = $('#syncchip');
+  if (!chip) return;
+  const c = sync.getCfg();
+  if (!sync.isOn()) { chip.hidden = false; chip.textContent = 'Not synced'; chip.onclick = () => openSetup(1); return; }
+  if (c.lastError) { chip.hidden = false; chip.textContent = 'Sync paused'; chip.onclick = () => show('settings'); return; }
+  chip.hidden = true;
+}
+
+// ---------- Guided sync setup ----------
+const TOKEN_URL = 'https://github.com/settings/personal-access-tokens/new?' + new URLSearchParams({
+  name: 'Focus Isle', description: 'Lets the Focus Isle app sync your island and write daily notes to focus-isle-data.',
+  expires_in: '366', contents: 'write',
+});
+
+function openSetup(step = 1) {
+  $('#setup')?.remove();
+  const back = h('<div class="modal-back" id="setup"><div class="modal setup" role="dialog" aria-modal="true" aria-labelledby="setup-title"></div></div>');
+  const box = $('.setup', back);
+  const close = () => back.remove();
+  const dots = (n) => `<div class="stepdots" aria-label="Step ${n} of 3">${[1, 2, 3].map(i => `<i class="${i <= n ? 'on' : ''}"></i>`).join('')}</div>`;
+  const later = () => { state.settings.onboarded = true; save(); close(); updateSyncChip(); };
+
+  const steps = {
+    1: () => {
+      box.innerHTML = `
+        <canvas class="px" width="96" height="96"></canvas>
+        <h3 id="setup-title">Keep your island safe</h3>
+        <p>Connect a private GitHub repo once. After that, your island saves itself after every session, shows up on your Mac and iPhone, and writes a daily note for Obsidian.</p>
+        <p class="small">Takes about 2 minutes. You'll do it once on each device.</p>
+        <div class="actions"><button class="btn primary" data-go="2">Set up sync</button></div>
+        <button class="linkbtn" data-later>Skip, keep it on this device only</button>`;
+      const cv = spriteCanvas(tagById(state.settings.tag).species, 6); cv.classList.add('px');
+      $('canvas', box).replaceWith(cv);
+    },
+    2: () => {
+      box.innerHTML = `${dots(1)}
+        <h3 id="setup-title">Create a key on GitHub</h3>
+        <p>The button opens GitHub with the form already filled in. There you only need to:</p>
+        <ol class="steps">
+          <li>Under <b>Repository access</b>, choose <b>Only select repositories</b> and pick <b>focus-isle-data</b>.</li>
+          <li>Tap <b>Generate token</b> at the bottom, then <b>copy</b> it.</li>
+        </ol>
+        <div class="actions"><a class="btn primary" href="${TOKEN_URL}" target="_blank" rel="noopener" data-open>Open GitHub</a></div>
+        <div class="actions two"><button class="btn ghost small" data-go="1">Back</button><button class="btn ghost small" data-go="3">I copied it</button></div>`;
+      $('[data-open]', box).addEventListener('click', () => setTimeout(() => steps[3](), 400));
+    },
+    3: () => {
+      const c = sync.getCfg();
+      box.innerHTML = `${dots(2)}
+        <h3 id="setup-title">Paste the key</h3>
+        <p>It starts with <b>github_pat_</b>. It stays on this device and is never shared or exported.</p>
+        <input type="password" id="setup-token" autocomplete="off" spellcheck="false" placeholder="github_pat_…" aria-label="GitHub token">
+        ${navigator.clipboard?.readText ? '<button class="btn ghost small block" data-paste>Paste from clipboard</button>' : ''}
+        <details class="more"><summary>Use a different repo</summary><input type="text" id="setup-repo" autocomplete="off" spellcheck="false" value="${esc(c.repo || sync.DEFAULT_REPO)}" aria-label="Repo, as owner/name"></details>
+        <p class="err" id="setup-err" role="alert"></p>
+        <div class="actions two"><button class="btn ghost small" data-go="2">Back</button><button class="btn primary small" data-connect>Connect</button></div>`;
+      const tok = $('#setup-token', box), err = $('#setup-err', box);
+      $('[data-paste]', box)?.addEventListener('click', async () => {
+        try { tok.value = (await navigator.clipboard.readText()).trim(); err.textContent = ''; } catch { err.textContent = 'Could not read the clipboard. Long-press the box and choose Paste.'; }
+      });
+      tok.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('[data-connect]', box).click(); });
+      $('[data-connect]', box).onclick = async () => {
+        const token = tok.value.trim(), repo = $('#setup-repo', box).value.trim();
+        if (!token) { err.textContent = 'Paste the key first.'; return tok.focus(); }
+        if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) { err.textContent = 'Give the repo as owner/name.'; return; }
+        const btn = $('[data-connect]', box); btn.disabled = true; btn.textContent = 'Connecting…'; err.textContent = '';
+        const had = state.sessions.length;
+        sync.setCfg({ token, repo, noteHashes: {}, lastError: null, lastSyncAt: null });
+        try {
+          await sync.checkRepo();
+          await syncNow('connect');
+          const c2 = sync.getCfg();
+          if (c2.lastError) throw new Error(c2.lastError);
+          state.settings.onboarded = true; save();
+          steps[4](state.sessions.length - had);
+        } catch (e) {
+          sync.disconnect();
+          btn.disabled = false; btn.textContent = 'Connect';
+          err.textContent = e.message || 'Could not connect.';
+        }
+      };
+      setTimeout(() => tok.focus(), 50);
+    },
+    4: (gained) => {
+      box.innerHTML = `${dots(3)}
+        <h3 id="setup-title">You're synced</h3>
+        <p>${gained > 0 ? `Loaded <b>${gained}</b> ${gained === 1 ? 'session' : 'sessions'} from your other devices. ` : ''}From now on your island saves itself when you open the app and after every session. Nothing else to do.</p>
+        <p class="small">Daily notes go to the <b>notes</b> folder of your repo. Do this once on your other devices too.</p>
+        <div class="actions"><button class="btn primary" data-done>Start focusing</button></div>`;
+      $('[data-done]', box).onclick = () => { close(); renderAll(); };
+    },
+  };
+  box.addEventListener('click', (e) => {
+    const go = e.target.closest('[data-go]');
+    if (go) steps[go.dataset.go]();
+    if (e.target.closest('[data-later]')) later();
+  });
+  steps[step]();
+  document.body.append(back);
 }
 
 async function renderDataInfo(el) {
@@ -783,7 +1059,7 @@ async function renderDataInfo(el) {
   const r = $('#restore', el);
   if (r) r.onclick = () => modal({
     title: 'Restore backup?', body: `<p>Replaces what's on this device with the backup from ${fmtDay(b.at)} (${b.data.sessions.length} sessions). Your current data becomes the new backup.</p>`,
-    actions: [{ label: 'Cancel' }, { label: 'Restore', primary: true, onClick: () => { const cur = state; state = normalize(b.data); state.epoch = 'e' + now().toString(36); writeBackup('before restore', cur); save(); toast('Backup restored'); renderAll(); } }],
+    actions: [{ label: 'Cancel' }, { label: 'Restore', primary: true, onClick: () => { const cur = state; state = normalize(b.data); newEpoch(); writeBackup('before restore', cur); save(); toast('Backup restored'); renderAll(); } }],
   });
 }
 
@@ -819,6 +1095,14 @@ if (state.active && !state.active.awayAt && state.active.seenAt && now() - state
 if (state.active?.awayAt) back(); // resumed after being killed in the background
 if (state.active && !state.active.awayAt && elapsed(state.active) >= state.active.planned) finish('done');
 show('focus');
+syncNow('open');
+if (!sync.isOn() && !state.settings.onboarded && !state.active) openSetup(1);
+let lastResumeSync = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || state.active || Date.now() - lastResumeSync < 30000) return;
+  lastResumeSync = Date.now(); syncNow('resume');
+});
+window.addEventListener('online', () => syncNow('reconnect'));
 if (storageIssues.includes('restored')) toast('Your saved data was unreadable, so it was restored from the automatic backup.', 6000);
 else if (storageIssues.includes('corrupt')) toast('Your saved data was unreadable. A copy was kept, but no backup was found.', 6000);
 const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);

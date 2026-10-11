@@ -11,7 +11,7 @@ A Forest-style focus timer. Focus and a pixel tree or building grows on your isl
 - Each tag builds its own object (Study → Library, Skill dev → Windmill…; Other asks what the session is for). Unlock more with coins (1 coin per focused minute) and assign them to any tag
 - Island view (Today / Week / Month / All), stats, tags, streaks
 - Ambient sounds (rain, waves, brown noise, birds), short and long breaks
-- Works offline. Data stays on each device; use Settings → Export/Import to move it
+- Works offline. Optional sync through a private GitHub repo (Settings → Sync and Obsidian notes), with a daily note per day for Obsidian. Export/Import is still available
 
 ## Develop
 ```sh
