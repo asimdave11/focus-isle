@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Focus Isle</title>
+  <meta name="description" content="Focus and grow a pixel island.">
+  <meta name="theme-color" content="#0e3440">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Focus Isle">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Pixelify+Sans:wght@400..700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="app">
+    <section id="view-focus" class="view active"></section>
+    <section id="view-island" class="view"></section>
+    <section id="view-stats" class="view"></section>
+    <section id="view-shop" class="view"></section>
+    <section id="view-settings" class="view"></section>
+  </main>
+
+  <nav id="tabbar">
+    <button data-view="focus" class="active"><span class="ico" data-icon="focus"></span>Focus</button>
+    <button data-view="island"><span class="ico" data-icon="island"></span>Island</button>
+    <button data-view="stats"><span class="ico" data-icon="stats"></span>Stats</button>
+    <button data-view="shop"><span class="ico" data-icon="shop"></span>Shop</button>
+    <button data-view="settings"><span class="ico" data-icon="settings"></span>Settings</button>
+  </nav>
+
+  <div id="dim" hidden><div class="dim-time"></div><div class="dim-hint">Tap to wake</div></div>
+  <div id="modal-root"></div>
+  <div id="toast" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
