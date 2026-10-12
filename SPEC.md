@@ -18,8 +18,10 @@ A Forest-style focus timer. Focus for a set time and a pixel-art building or tre
 - **Tag → object**: each tag builds its own object (Study → Library, Work → Cottage, Skill dev → Windmill, Wellbeing → Cherry, Other → Oak). Change it in Shop or Settings. The island legend counts per tag. **Other** asks what the session is for (required, with recent answers to pick from); that label is saved with the session and shown in history and stats.
 - **Strict mode** (optional, off by default): the page goes hidden (app switch or tab switch) for longer than the grace period, and the session dies. The Mac option also counts window blur (switching to another app).
 - **Island**: every finished session is placed on an island that grows organically, filtered by Today / Week / Month / All.
+- **Size = time**: objects are drawn bigger for longer sessions: small under 20 min, normal 20–44, large 45–89 (2x2 plot), huge 90+ (2x2 plot). Withered ones are sized by the time you actually focused. The Focus screen previews the size as you change the length, and the Island screen shows a size key.
 - **Stats**: totals, bar chart by hour/day/month, tag breakdown, success vs dead, history.
 - **Streaks & coins**: 1 coin per focused minute. Streak = consecutive days with at least one finished session. Spend coins in the Shop to unlock objects (Pine, Lighthouse, Castle) and give them to a tag.
+- **Animals**: Chicken 80, Duck 120, Pig 200, Sheep 250, Cow 350, Horse 500 coins. Once unlocked they wander between free tiles on the Island and Focus screens (8 fps hops, facing the way they walk; still when reduce motion is on; paused while the screen is hidden). They are not given to tags, and they sync like other unlocks.
 - **Sounds**: rain, waves, brown noise and birds, generated with WebAudio (no assets). A chime at the end.
 - **Notifications**: when a session or break ends while you're in another app (permission requested on the first Plant).
 - **Breaks**: after a session, offer a short break (or a long break every 4th session).

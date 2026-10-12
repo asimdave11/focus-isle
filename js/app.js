@@ -1,4 +1,4 @@
-import { SPECIES, drawSprite, drawGrowing, spriteCanvas, iconCanvas } from './sprites.js';
+import { SPECIES, ANIMALS, drawSprite, drawGrowing, spriteCanvas, iconCanvas } from './sprites.js';
 import * as audio from './audio.js';
 import * as sync from './sync.js';
 
@@ -304,62 +304,156 @@ function streaks() {
 // ---------- Island renderer ----------
 const WATER = '#1f6f7a', WATER_HI = '#4fa3a5', SAND = '#e9d8a6', GRASS = '#6ab04c', GRASS_D = '#4f8f3a', DIRT = '#8a5a3b';
 
-// items: [{ species, status, progress }] — drawn from the island centre outward.
-function renderIsland(canvas, items, { minLand = 9, maxCssWidth = 520, noise = 0.9, water = true } = {}) {
-  const n = items.length;
-  const land = Math.max(minLand, Math.ceil(n * 1.4) + 4);
-  const R = Math.ceil(Math.sqrt(land / Math.PI)) + 3;
-  const cells = [];
-  for (let y = -R; y <= R; y++) for (let x = -R; x <= R; x++) cells.push({ x, y, d: Math.hypot(x, y * 1.15) + hash(x, y) * noise });
-  cells.sort((a, b) => a.d - b.d);
-  const landCells = cells.slice(0, land);
-  const isLand = new Set(landCells.map(c => `${c.x},${c.y}`));
+// Longer sessions build bigger objects. `ps` is the sprite pixel size on a 32-unit tile;
+// sizes 3 and 4 need a 2x2 plot.
+const TILE = 32;
+const SIZE_TIERS = [
+  { min: 0, ps: 1, name: 'Small', range: 'under 20 min' },
+  { min: 20, ps: 2, name: 'Normal', range: '20 to 44 min' },
+  { min: 45, ps: 3, name: 'Large', range: '45 to 89 min' },
+  { min: 90, ps: 4, name: 'Huge', range: '90 min or more' },
+];
+const sizeFor = (minutes) => SIZE_TIERS.reduce((ps, t) => (minutes >= t.min ? t.ps : ps), 1);
+const itemMinutes = (it) => it.minutes ?? (it.focused ?? it.planned ?? 0) / 60;
+
+// items: [{ species, status, progress?, minutes? | focused }] — placed from the island centre outward, oldest first.
+function renderIsland(canvas, items, { minLand = 9, maxCssWidth = 520, noise = 0.9, water = true, animals = [] } = {}) {
+  const sizes = items.map(it => sizeFor(itemMinutes(it)));
+  const feet = sizes.map(ps => (ps >= 3 ? 2 : 1));
+  const need = feet.reduce((t, f) => t + f * f, 0);
+  const key = (x, y) => `${x},${y}`;
+
+  let land = Math.max(minLand, Math.ceil(need * 1.4) + 4 + animals.length), landCells, isLand, anchors;
+  for (let attempt = 0; attempt < 8; attempt++, land = Math.ceil(land * 1.3)) {
+    const R = Math.ceil(Math.sqrt(land / Math.PI)) + 3;
+    const cells = [];
+    for (let y = -R; y <= R; y++) for (let x = -R; x <= R; x++) cells.push({ x, y, d: Math.hypot(x, y * 1.15) + hash(x, y) * noise });
+    cells.sort((a, b) => a.d - b.d);
+    landCells = cells.slice(0, land);
+    isLand = new Set(landCells.map(c => key(c.x, c.y)));
+    const taken = new Map();
+    anchors = [];
+    let ok = true;
+    for (let i = 0; i < items.length && ok; i++) {
+      const f = feet[i];
+      const spot = landCells.find(c => {
+        for (let dy = 0; dy < f; dy++) for (let dx = 0; dx < f; dx++) {
+          const k = key(c.x + dx, c.y + dy);
+          if (!isLand.has(k) || taken.has(k)) return false;
+        }
+        return true;
+      });
+      if (!spot) { ok = false; break; }
+      for (let dy = 0; dy < f; dy++) for (let dx = 0; dx < f; dx++) taken.set(key(spot.x + dx, spot.y + dy), i);
+      anchors.push(spot);
+    }
+    if (ok) { canvas._taken = taken; break; }
+  }
+
   const xs = landCells.map(c => c.x), ys = landCells.map(c => c.y);
   const minX = Math.min(...xs) - 1, maxX = Math.max(...xs) + 1, minY = Math.min(...ys) - 1, maxY = Math.max(...ys) + 1;
-  const W = (maxX - minX + 1) * 16, H = (maxY - minY + 1) * 16;
+  const W = (maxX - minX + 1) * TILE, H = (maxY - minY + 1) * TILE;
 
   const dpr = window.devicePixelRatio || 1;
   const cssMax = Math.min(maxCssWidth, canvas.parentElement?.clientWidth || maxCssWidth);
   const scale = Math.max(1, Math.floor((cssMax * dpr) / W));
   canvas.width = W * scale; canvas.height = H * scale;
-  canvas.style.width = `${(W * scale) / dpr}px`;
-  canvas.style.height = `${(H * scale) / dpr}px`;
-  const ctx = canvas.getContext('2d');
+  const cssW = Math.min((W * scale) / dpr, cssMax); // very large islands shrink to fit
+  canvas.style.width = `${cssW}px`;
+  canvas.style.height = `${(cssW * H) / W}px`;
+  const out = canvas.getContext('2d');
+  const base = document.createElement('canvas');
+  base.width = canvas.width; base.height = canvas.height;
+  const ctx = base.getContext('2d');
   ctx.imageSmoothingEnabled = false;
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
 
   if (water) {
     ctx.fillStyle = WATER; ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = WATER_HI;
-    for (let y = 0; y < H; y += 6) for (let x = 0; x < W; x += 9) if (hash(x, y) > 0.86) ctx.fillRect(x, y, 3, 1);
+    for (let y = 0; y < H; y += 12) for (let x = 0; x < W; x += 18) if (hash(x, y) > 0.86) ctx.fillRect(x, y, 6, 2);
   }
 
-  const px = (c) => (c.x - minX) * 16, py = (c) => (c.y - minY) * 16;
-  for (const c of landCells) { ctx.fillStyle = SAND; ctx.fillRect(px(c) - 2, py(c) - 2, 20, 21); }
+  const px = (c) => (c.x - minX) * TILE, py = (c) => (c.y - minY) * TILE;
+  for (const c of landCells) { ctx.fillStyle = SAND; ctx.fillRect(px(c) - 4, py(c) - 4, TILE + 8, TILE + 10); }
   for (const c of landCells) {
     const x = px(c), y = py(c);
-    ctx.fillStyle = GRASS; ctx.fillRect(x, y, 16, 16);
-    if (!isLand.has(`${c.x},${c.y + 1}`)) { ctx.fillStyle = DIRT; ctx.fillRect(x, y + 14, 16, 3); }
+    ctx.fillStyle = GRASS; ctx.fillRect(x, y, TILE, TILE);
+    if (!isLand.has(key(c.x, c.y + 1))) { ctx.fillStyle = DIRT; ctx.fillRect(x, y + TILE - 4, TILE, 6); }
     ctx.fillStyle = GRASS_D;
     for (let i = 0; i < 4; i++) {
-      const gx = Math.floor(hash(c.x * 7 + i, c.y) * 14), gy = Math.floor(hash(c.x, c.y * 5 + i) * 12);
-      ctx.fillRect(x + gx, y + gy, 1, 2);
+      const gx = Math.floor(hash(c.x * 7 + i, c.y) * 14) * 2, gy = Math.floor(hash(c.x, c.y * 5 + i) * 12) * 2;
+      ctx.fillRect(x + gx, y + gy, 2, 4);
     }
   }
 
-  const placed = landCells.slice(0, n).map((c, i) => ({ c, item: items[i] }));
-  placed.sort((a, b) => a.c.y - b.c.y || a.c.x - b.c.x);
-  for (const { c, item } of placed) {
-    const x = px(c), y = py(c) - 3;
-    if (item.status === 'dead') drawSprite(ctx, 'dead', x, y);
-    else if (item.progress != null && item.progress < 1) drawGrowing(ctx, item.species, x, y, item.progress);
-    else drawSprite(ctx, item.species, x, y);
+  const order = items.map((item, i) => ({ item, i, a: anchors[i], f: feet[i], ps: sizes[i] }));
+  order.sort((p, q) => (p.a.y + p.f) - (q.a.y + q.f) || p.a.x - q.a.x);
+  for (const { item, a, f, ps } of order) {
+    const area = f * TILE, size = 16 * ps;
+    const x = px(a) + (area - size) / 2, y = py(a) + area - size - 2;
+    if (item.status === 'dead') drawSprite(ctx, 'dead', x, y, 1, ps);
+    else if (item.progress != null && item.progress < 1) drawGrowing(ctx, item.species, x, y, item.progress, ps);
+    else drawSprite(ctx, item.species, x, y, 1, ps);
   }
-  // Map from logical tile to item index, for tap-to-inspect.
+
+  // Animals wander between free land tiles.
+  cancelAnimationFrame(canvas._anim);
+  const free = landCells.filter(c => !canvas._taken?.has(key(c.x, c.y)));
+  const freeKeys = new Set(free.map(c => key(c.x, c.y)));
+  const prev = new Map((canvas._herd || []).map(a => [a.id, a]));
+  const herd = animals.map((id, i) => {
+    const p0 = prev.get(id);
+    if (p0 && freeKeys.has(key(p0.cell.x, p0.cell.y)) && canvas._origin === `${minX},${minY}`) return p0; // keep walking where it was
+    const c = free.length ? free[Math.floor(hash(i, 11) * free.length)] : landCells[0];
+    const at = { x: px(c) + 8, y: py(c) + 12 };
+    return { id, x: at.x, y: at.y, tx: at.x, ty: at.y, cell: c, face: hash(i, 5) > 0.5 ? 1 : -1, wait: Math.floor(hash(i, 9) * 20) };
+  });
+  canvas._herd = herd; canvas._origin = `${minX},${minY}`;
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const drawAnimal = (a, bob) => {
+    out.save();
+    out.setTransform(scale * a.face, 0, 0, scale, a.face === 1 ? 0 : canvas.width, 0);
+    const x = a.face === 1 ? a.x : W - a.x - 16;
+    drawSprite(out, a.id, x, a.y - bob, 1, 1);
+    out.restore();
+  };
+  let frame = 0, last = 0;
+  const paint = (t = 0) => {
+    if (!canvas.isConnected || (frame && canvas.offsetParent === null)) return; // hidden screen: stop; showing it again redraws
+    canvas._anim = requestAnimationFrame(paint);
+    if (t - last < 125 && frame) return; // ~8 fps, like a pixel game
+    last = t; frame++;
+    out.setTransform(1, 0, 0, 1, 0, 0);
+    out.imageSmoothingEnabled = false;
+    out.clearRect(0, 0, canvas.width, canvas.height);
+    out.drawImage(base, 0, 0);
+    for (const a of herd) {
+      const moving = a.x !== a.tx || a.y !== a.ty;
+      if (!still && !document.hidden) {
+        if (moving) {
+          a.x += Math.sign(a.tx - a.x) * Math.min(2, Math.abs(a.tx - a.x));
+          a.y += Math.sign(a.ty - a.y) * Math.min(2, Math.abs(a.ty - a.y));
+        } else if (--a.wait <= 0) {
+          const next = free.filter(c => Math.abs(c.x - a.cell.x) + Math.abs(c.y - a.cell.y) === 1);
+          if (next.length) {
+            const c = next[Math.floor(Math.random() * next.length)];
+            a.cell = c; a.tx = px(c) + 8; a.ty = py(c) + 12;
+            if (a.tx !== a.x) a.face = a.tx > a.x ? 1 : -1;
+          }
+          a.wait = 12 + Math.floor(Math.random() * 30);
+        }
+      }
+      drawAnimal(a, moving && frame % 2 ? 1 : 0);
+    }
+    if (still || !herd.length) cancelAnimationFrame(canvas._anim);
+  };
+  paint();
+  // Tap-to-inspect: CSS position -> tile -> the item that owns it.
   canvas._hit = (cx, cy) => {
-    const lx = Math.floor((cx * dpr) / scale / 16) + minX, ly = Math.floor(((cy * dpr) / scale + 3) / 16) + minY;
-    const i = landCells.slice(0, n).findIndex(c => c.x === lx && c.y === ly);
-    return i >= 0 ? items[i] : null;
+    const lx = Math.floor((cx * W) / cssW / TILE) + minX, ly = Math.floor((cy * W) / cssW / TILE) + minY;
+    const i = canvas._taken?.get(key(lx, ly));
+    return i == null ? null : items[i];
   };
 }
 
@@ -527,8 +621,8 @@ function drawScene(p) {
   const c = $('#scene');
   if (!c) return;
   const a = state.active;
-  const item = a ? { species: a.species, progress: p } : { species: tagById(state.settings.tag).species, progress: 0.0 };
-  renderIsland(c, [item], { minLand: 13, maxCssWidth: 280, noise: 0.25, water: false });
+  const item = a ? { species: a.species, progress: p, minutes: a.planned / 60 } : { species: tagById(state.settings.tag).species, progress: 0.0, minutes: state.settings.duration };
+  renderIsland(c, [item], { minLand: 13, maxCssWidth: 280, noise: 0.25, water: false, animals: state.unlocked.filter(id => ANIMALS.some(a => a.id === id)) });
   placeSun(a ? p : null);
 }
 
@@ -647,7 +741,7 @@ function renderFocus() {
       <p class="hint" id="buildhint"></p>
       <h2>Sound</h2><div class="chips" id="sounds"></div>
       <div class="actions"><button class="btn primary block" id="start">Plant</button></div>`;
-    const setDur = (m) => { s.duration = Math.min(180, Math.max(5, m)); save(); $('#dur').value = s.duration; $('#timer').textContent = fmtClock(s.duration * 60); };
+    const setDur = (m) => { s.duration = Math.min(180, Math.max(5, m)); save(); $('#dur').value = s.duration; $('#timer').textContent = fmtClock(s.duration * 60); tick.lastStep = -1; drawScene(0); };
     $('#dur', ctl).oninput = (e) => setDur(+e.target.value);
     $('#minus', ctl).onclick = () => setDur(s.duration - 5);
     $('#plus', ctl).onclick = () => setDur(s.duration + 5);
@@ -675,7 +769,13 @@ function renderFocus() {
         $('.recent', wrap).append(c);
       }
     }
-    $('#buildhint', ctl).innerHTML = `${esc(cur.name)} builds ${aOrAn(speciesById(cur.species).name)} <b>${esc(speciesById(cur.species).name)}</b>. Change it in Shop or Settings.`;
+    const hint = () => {
+      const tier = SIZE_TIERS.find(t => t.ps === sizeFor(s.duration));
+      $('#buildhint', ctl).innerHTML = `${esc(cur.name)} builds ${aOrAn(tier.name)} <b>${tier.name.toLowerCase()} ${esc(speciesById(cur.species).name.toLowerCase())}</b> at this length. Longer sessions build bigger.`;
+    };
+    hint();
+    ctl.addEventListener('input', (e) => { if (e.target.id === 'dur') hint(); });
+    ctl.addEventListener('click', (e) => { if (e.target.closest('#minus, #plus')) hint(); });
     renderSoundChips($('#sounds', ctl), false);
     $('#start', ctl).onclick = startSession;
   }
@@ -714,16 +814,23 @@ function renderIslandView() {
     <div class="seg" id="iseg">${['today', 'week', 'month', 'all'].map(r => `<button data-r="${r}" class="${r === islandRange ? 'sel' : ''}">${r === 'all' ? 'All time' : r[0].toUpperCase() + r.slice(1)}</button>`).join('')}</div>
     <div class="island-wrap"><canvas id="isl" class="px"></canvas></div>
     <div class="island-meta" id="imeta"></div>
-    <div class="legend" id="legend"></div>`;
+    <div class="legend" id="legend"></div>
+    <div class="sizekey" id="sizekey"><p>Longer sessions build bigger.</p></div>`;
   $('#iseg', v).onclick = (e) => { const r = e.target.dataset.r; if (r) { islandRange = r; renderIslandView(); } };
   const from = rangeStart(islandRange);
   const list = state.sessions.filter(s => s.start >= from).sort((a, b) => a.start - b.start);
   const done = list.filter(s => s.status === 'done');
   const cv = $('#isl', v);
-  requestAnimationFrame(() => renderIsland(cv, list, { minLand: 9, maxCssWidth: 560 }));
+  requestAnimationFrame(() => renderIsland(cv, list, { minLand: 9, maxCssWidth: 560, animals: state.unlocked.filter(id => ANIMALS.some(a => a.id === id)) }));
   $('#imeta', v).textContent = list.length
     ? `${done.length} built and ${list.length - done.length} withered, ${fmtDur(done.reduce((t, s) => t + s.focused, 0))} of focus. Tap a building to see when you made it.`
     : 'Nothing here yet. Plant something!';
+  const sk = $('#sizekey', v);
+  for (const t of SIZE_TIERS) {
+    const row = h(`<div class="sk"><span class="sk-art"></span><b>${t.name}</b><span>${t.range}</span></div>`);
+    const c = spriteCanvas('oak', t.ps); c.classList.add('px'); $('.sk-art', row).append(c);
+    sk.append(row);
+  }
   const lg = $('#legend', v);
   const byTag = {};
   for (const s of done) byTag[s.tag] = (byTag[s.tag] || 0) + 1;
@@ -850,6 +957,26 @@ function renderShop() {
       li.append(btn);
     }
     list.append(li);
+  }
+
+  v.append(h('<h2>Animals</h2>'), h('<p class="lede">Animals roam your island once you unlock them.</p>'));
+  const zoo = h('<ul class="shelf"></ul>');
+  v.append(zoo);
+  for (const an of ANIMALS) {
+    const owned = state.unlocked.includes(an.id);
+    const li = h(`<li class="${owned ? '' : 'locked'}"><div class="main"><div class="name">${an.name}</div>
+      <div class="sub">${owned ? 'Roaming your island' : `${an.cost} coins`}</div></div></li>`);
+    const cv = spriteCanvas(an.id, 4); cv.classList.add('px'); li.prepend(cv);
+    if (!owned) {
+      const btn = h(`<button class="btn small">Unlock</button>`);
+      if (coins() < an.cost) { btn.disabled = true; btn.title = `You need ${an.cost - coins()} more coins`; }
+      btn.onclick = () => {
+        state.purchases.push({ id: `p${now()}`, species: an.id, cost: an.cost, at: now() }); state.unlocked.push(an.id); save();
+        audio.chime(); toast(`The ${an.name.toLowerCase()} is on your island now.`); renderShop();
+      };
+      li.append(btn);
+    }
+    zoo.append(li);
   }
 }
 

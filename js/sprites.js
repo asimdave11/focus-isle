@@ -153,6 +153,78 @@ const SPRITES = {
     '................',
     '................',
   ],
+  // Animals (side view, facing right)
+  chicken: [
+    ...Array(8).fill('................'),
+    '........rr......',
+    '.......wwwo.....',
+    '.......wkw......',
+    '..ww..wwww......',
+    '..wwwwwwww......',
+    '...wwswww.......',
+    '.....o.o........',
+    '................',
+  ],
+  duck: [
+    ...Array(9).fill('................'),
+    '.........yy.....',
+    '........ykyoo...',
+    '........yyy.....',
+    '..yyyyyyyyy.....',
+    '..yyyyyyyy......',
+    '...yyyyyy.......',
+    '................',
+  ],
+  pig: [
+    ...Array(9).fill('................'),
+    '..........P.....',
+    '..ppppppppppp...',
+    'Ppppppppppkpp P.',
+    '.ppppppppppppPP.',
+    '..ppppppppppp...',
+    '...P.P....P.P...',
+    '................',
+  ],
+  sheep: [
+    ...Array(7).fill('................'),
+    '..wswwwsww......',
+    '.wwwwwwwwwwkk...',
+    '.swwwwswwwwkkk..',
+    '.wwwswwwwwwkk...',
+    '..wwwwwwsww.....',
+    '...k.k..k.k.....',
+    '...k.k..k.k.....',
+    '................',
+    '................',
+  ],
+  cow: [
+    ...Array(6).fill('................'),
+    '..........k..k..',
+    '.wwwwwwwwwwwwkww',
+    'kwkkwwwwkkwwwwww',
+    '.wkkwwwwkkwwwwpp',
+    '.wwwwwkkwwwwwwpp',
+    '.wwwwwkkwwwww...',
+    '.k.k......k.k...',
+    '.k.k......k.k...',
+    '.s.s......s.s...',
+    '................',
+  ],
+  horse: [
+    ...Array(4).fill('................'),
+    '...........Bb...',
+    '..........Bbbb..',
+    '..........Bbkbb.',
+    '.........Bbbbbbb',
+    '.bbbbbbbbbbb....',
+    'Bbbbbbbbbbbb....',
+    'B.bbbbbbbbbb....',
+    'B.bbbbbbbbbb....',
+    '..b.b....b.b....',
+    '..b.b....b.b....',
+    '..B.B....B.B....',
+    '................',
+  ],
   dead: [
     '................',
     '................',
@@ -199,11 +271,22 @@ export const SPECIES = [
   { id: 'castle', name: 'Castle', cost: 1200 },
 ];
 
+// Animals roam the island once unlocked; they aren't given to tags.
+export const ANIMALS = [
+  { id: 'chicken', name: 'Chicken', cost: 80 },
+  { id: 'duck', name: 'Duck', cost: 120 },
+  { id: 'pig', name: 'Pig', cost: 200 },
+  { id: 'sheep', name: 'Sheep', cost: 250 },
+  { id: 'cow', name: 'Cow', cost: 350 },
+  { id: 'horse', name: 'Horse', cost: 500 },
+];
+
 // Normalise rows to exactly 16 chars so hand-drawn typos can't break rendering.
 for (const k in SPRITES) SPRITES[k] = SPRITES[k].map(r => (r + '.'.repeat(16)).slice(0, 16).replace(/ /g, '.'));
 
-// Draw sprite at (x,y) in logical pixels. `reveal` (0..1) shows rows bottom-up, like it's being built.
-export function drawSprite(ctx, id, x, y, reveal = 1) {
+// Draw sprite at (x,y) in logical pixels, each sprite pixel `ps` units wide.
+// `reveal` (0..1) shows rows bottom-up, like it's being built.
+export function drawSprite(ctx, id, x, y, reveal = 1, ps = 1) {
   const rows = SPRITES[id] || SPRITES.oak;
   const shown = Math.ceil(16 * reveal);
   for (let r = 16 - shown; r < 16; r++) {
@@ -212,17 +295,17 @@ export function drawSprite(ctx, id, x, y, reveal = 1) {
       const ch = row[c];
       if (ch === '.') continue;
       ctx.fillStyle = PALETTE[ch];
-      ctx.fillRect(x + c, y + r, 1, 1);
+      ctx.fillRect(x + c * ps, y + r * ps, ps, ps);
     }
   }
 }
 
 // Growth stages for a session in progress.
-export function drawGrowing(ctx, id, x, y, p) {
-  if (p < 0.12) return drawSprite(ctx, 'mound', x, y);
-  if (p < 0.3) return drawSprite(ctx, 'sprout', x, y);
-  drawSprite(ctx, 'mound', x, y);
-  drawSprite(ctx, id, x, y, 0.25 + 0.75 * ((p - 0.3) / 0.7));
+export function drawGrowing(ctx, id, x, y, p, ps = 1) {
+  if (p < 0.12) return drawSprite(ctx, 'mound', x, y, 1, ps);
+  if (p < 0.3) return drawSprite(ctx, 'sprout', x, y, 1, ps);
+  drawSprite(ctx, 'mound', x, y, 1, ps);
+  drawSprite(ctx, id, x, y, 0.25 + 0.75 * ((p - 0.3) / 0.7), ps);
 }
 
 export function spriteCanvas(id, scale = 4) {
